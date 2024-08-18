@@ -14,7 +14,7 @@ func TestJob_RunWithoutInterval(t *testing.T) {
 		executed++
 		time.Sleep(800 * time.Millisecond)
 	}
-	job := NewJob(task, 5, Immediate)
+	job := NewJob(task, 5, Immediate, false)
 	job.Run()
 
 	time.Sleep(time.Second)
@@ -31,7 +31,7 @@ func TestJob_RunWithInterval(t *testing.T) {
 		t.Log("Task executed:", time.Since(start))
 		executed++
 	}
-	job := NewJob(task, 5, 800*time.Millisecond)
+	job := NewJob(task, 5, 800*time.Millisecond, false)
 	job.Run()
 
 	time.Sleep(time.Second)

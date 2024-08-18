@@ -18,14 +18,16 @@ type Pool struct {
 	// 用于等待所有任务完成后关闭
 	wg sync.WaitGroup
 	// 用于结束 pool
-	closed bool
+	closed      bool
+	autoRecover bool
 }
 
 // NewPool 创建一个协程池
-func NewPool(size int) *Pool {
+func NewPool(size int, autoRecover bool) *Pool {
 	return &Pool{
-		pool: make(chan struct{}, size),
-		size: size,
+		pool:        make(chan struct{}, size),
+		size:        size,
+		autoRecover: autoRecover,
 	}
 }
 
@@ -43,9 +45,11 @@ func (p *Pool) AddTask(task Task) error {
 	go func() {
 		// 释放任务
 		defer func() {
-			// 自动恢复 panic
-			if r := recover(); r != nil {
-				fmt.Printf("Pool run task error: %v", r)
+			if p.autoRecover {
+				// 自动恢复 panic
+				if r := recover(); r != nil {
+					fmt.Printf("Pool run task error: %v", r)
+				}
 			}
 			<-p.pool
 			p.wg.Done()

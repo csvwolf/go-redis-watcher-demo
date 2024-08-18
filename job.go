@@ -8,14 +8,15 @@ import (
 const Immediate = 0
 
 type Job struct {
-	task     Task
-	pool     *Pool
-	stop     bool
-	interval time.Duration
+	task        Task
+	pool        *Pool
+	stop        bool
+	interval    time.Duration
+	autoRecover bool
 }
 
-func NewJob(task Task, size int, interval time.Duration) *Job {
-	pool := NewPool(size)
+func NewJob(task Task, size int, interval time.Duration, autoRecover bool) *Job {
+	pool := NewPool(size, autoRecover)
 
 	return &Job{task: task, pool: pool, interval: interval}
 }

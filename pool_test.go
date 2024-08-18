@@ -8,7 +8,7 @@ import (
 )
 
 func TestPool_AddTask(t *testing.T) {
-	pool := NewPool(2)
+	pool := NewPool(2, true)
 	var executed int32
 
 	task := func() {
@@ -33,7 +33,7 @@ func TestPool_AddTask(t *testing.T) {
 }
 
 func TestPool_Close(t *testing.T) {
-	pool := NewPool(2)
+	pool := NewPool(2, true)
 	var executed int32
 
 	task := func() {
@@ -64,7 +64,7 @@ func TestPool_Close(t *testing.T) {
 }
 
 func TestPool_AddTaskToClosedPool(t *testing.T) {
-	pool := NewPool(2)
+	pool := NewPool(2, true)
 	pool.Close() // 立即关闭池子
 
 	task := func() {
@@ -79,7 +79,7 @@ func TestPool_AddTaskToClosedPool(t *testing.T) {
 }
 
 func TestPool_ConcurrentAddTask(t *testing.T) {
-	pool := NewPool(2)
+	pool := NewPool(2, true)
 	var executed int32
 
 	task := func() {
@@ -107,7 +107,7 @@ func TestPool_ConcurrentAddTask(t *testing.T) {
 }
 
 func TestPool_RecoveryFromPanic(t *testing.T) {
-	pool := NewPool(2)
+	pool := NewPool(2, true)
 	var executed int32
 
 	task := func() {
