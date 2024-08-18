@@ -40,3 +40,16 @@ func TestJob_RunWithInterval(t *testing.T) {
 		t.Error("Task should be executed")
 	}
 }
+
+func TestJob_RunBlock(t *testing.T) {
+	var executed int
+	var start = time.Now()
+
+	task := func() {
+		t.Log("Task executed:", time.Since(start))
+		executed++
+		time.Sleep(800 * time.Millisecond)
+	}
+	job := NewJob(task, 5, Immediate, false)
+	job.Run()
+}
