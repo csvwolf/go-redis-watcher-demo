@@ -17,7 +17,7 @@ func main() {
 	ctx := context.Background()
 	watcher := NewWatcher(ctx, client, &Config{
 		Callback: func(action EventType, key string) {
-			fmt.Println("action:", action, "key:", key)
+			fmt.Println(time.Now().String(), "action:", action, "key:", key)
 		},
 	}, "__keyevent@0__:*")
 	job := NewJob(func() {
@@ -27,7 +27,7 @@ func main() {
 		if err != nil {
 			fmt.Println("set key error:", err)
 		}
-		fmt.Println("生成 key:", randKey, "到期时间:", randSec)
+		fmt.Println(time.Now().String(), " 生成 key:", randKey, "到期时间:", randSec)
 	}, 1, time.Second*1, false)
 	go job.Run()
 	watcher.Watch()

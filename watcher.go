@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/redis/go-redis/v9"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -125,7 +126,7 @@ func (w *Watcher) makeUpTask() {
 		timer   = time.Now().Add(-10 * time.Second)
 		members []interface{}
 	)
-	result, err := w.redisClient.GetClient().ZRange(w.ctx, w.queueKey, 0, timer.UnixMilli()).Result()
+	result, err := w.redisClient.GetClient().ZRangeByScore(w.ctx, w.queueKey, &redis.ZRangeBy{Min: "0", Max: strconv.FormatInt(timer.UnixMilli(), 10)}).Result()
 	if err != nil {
 		fmt.Printf("Watcher makeup failed: err=%v", err)
 		return
@@ -133,7 +134,7 @@ func (w *Watcher) makeUpTask() {
 	if len(result) == 0 {
 		return
 	}
-	fmt.Println("补偿 keys:", result)
+	fmt.Println(time.Now().String(), "补偿 keys:", result)
 	for _, r := range result {
 		w.callback(Expired, r)
 		members = append(members, r)
@@ -152,7 +153,11 @@ func (w *Watcher) watchHandler(ctx context.Context, callback Callback) {
 		fmt.Println("Error receiving message:", err)
 	}
 	splitPrefix := strings.Split(w.channel, ":")
-	eventType := strings.TrimPrefix(msg.Channel, splitPrefix[0])
+	if len(splitPrefix) == 0 {
+		fmt.Println("msg unknown:", msg)
+		return
+	}
+	eventType := strings.TrimPrefix(msg.Channel, fmt.Sprintf("%s:", splitPrefix[0]))
 	callback(EventType(eventType), msg.Payload)
 	// 执行成功，则删除补偿队列中的 key
 	w.redisClient.GetClient().ZRem(ctx, w.queueKey, msg.Payload)
