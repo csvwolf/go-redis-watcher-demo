@@ -112,8 +112,6 @@ func (w *Watcher) SetKey(ctx context.Context, key string, value interface{}, exp
 	return nil
 }
 
-// 1. 需要持久化到 Redis Stream（也可以是消息队列）
-// 2. 需要有补偿
 func (w *Watcher) Watch() {
 	go w.makeup.Run()
 	w.job.Run()
