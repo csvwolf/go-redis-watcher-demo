@@ -8,13 +8,16 @@ type RedisClient struct {
 	client *redis.Client
 }
 
-func NewClient(options *redis.Options) *RedisClient {
-	client := redis.NewClient(options)
+func NewClient(r *redis.Client) *RedisClient {
 	return &RedisClient{
-		client: client,
+		client: r,
 	}
 }
 
 func (r *RedisClient) GetClient() *redis.Client {
 	return r.client
+}
+
+func (r *RedisClient) Close() error {
+	return r.client.Close()
 }
