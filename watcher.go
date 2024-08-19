@@ -6,6 +6,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,11 +21,11 @@ const (
 type Callback = func(action EventType, key string)
 
 type Watcher struct {
-	redisClient *RedisClient
+	redisClient RedisClient
 	queueKey    string
-	job         *Job
+	jobs        []*Job
 	channel     string
-	pubsub      *redis.PubSub
+	pubsubs     []*redis.PubSub
 	ctx         context.Context
 	callback    Callback
 	makeup      *Job
@@ -34,11 +35,6 @@ type Config struct {
 	QueueKey string
 	JobSize  int
 	Callback Callback
-}
-
-type QueueItem struct {
-	Key   string
-	Value interface{}
 }
 
 func (config *Config) GetQueueKey() string {
@@ -62,7 +58,7 @@ func (config *Config) GetCallback() Callback {
 	return config.Callback
 }
 
-func NewWatcher(ctx context.Context, client *RedisClient, config *Config, channel string) *Watcher {
+func NewWatcher(ctx context.Context, client RedisClient, config *Config, channel string) *Watcher {
 	watcher := &Watcher{
 		redisClient: client,
 		queueKey:    config.GetQueueKey(),
@@ -70,11 +66,12 @@ func NewWatcher(ctx context.Context, client *RedisClient, config *Config, channe
 		callback:    config.GetCallback(),
 		channel:     channel,
 	}
-	pubsub := watcher.redisClient.GetClient().PSubscribe(ctx, "__keyevent@0__:*")
-	watcher.pubsub = pubsub
-	job := NewJob(func() { watcher.watchHandler(ctx, config.GetCallback()) }, config.GetJobSize(), Immediate, false)
-	watcher.job = job
-
+	pubsubs := watcher.redisClient.PSubscribe(ctx, channel)
+	watcher.pubsubs = pubsubs
+	for _, pubsub := range pubsubs {
+		job := NewJob(func() { watcher.watchHandler(ctx, pubsub, config.GetCallback()) }, config.GetJobSize(), Immediate, false)
+		watcher.jobs = append(watcher.jobs, job)
+	}
 	// 补偿任务
 	watcher.makeup = NewJob(func() { watcher.makeUpTask() }, 1, time.Second*10, true)
 
@@ -82,12 +79,16 @@ func NewWatcher(ctx context.Context, client *RedisClient, config *Config, channe
 }
 
 func (w *Watcher) Close() error {
-	err := w.pubsub.Close()
-	if err != nil {
-		return err
+	for _, pubsub := range w.pubsubs {
+		err := pubsub.Close()
+		if err != nil {
+			return err
+		}
 	}
 	w.makeup.Close()
-	w.job.Close()
+	for _, job := range w.jobs {
+		job.Close()
+	}
 	return nil
 }
 
@@ -97,24 +98,28 @@ func (w *Watcher) SetKey(ctx context.Context, key string, value interface{}, exp
 		now = time.Now().Add(expire)
 	)
 
-	//jsonStr, err := json.Marshal(&QueueItem{Key: key, Value: value})
-	//if err != nil {
-	//	return err
-	//}
-	if err = w.redisClient.GetClient().Set(ctx, key, value, expire).Err(); err != nil {
+	if err = w.redisClient.Set(ctx, key, value, expire).Err(); err != nil {
 		return err
 	}
 
 	// 队列用于补偿
-	if err = w.redisClient.GetClient().ZAdd(ctx, w.queueKey, redis.Z{Member: key, Score: float64(now.UnixMilli())}).Err(); err != nil {
+	if err = w.redisClient.ZAdd(ctx, w.queueKey, redis.Z{Member: key, Score: float64(now.UnixMilli())}).Err(); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (w *Watcher) Watch() {
+	var wg sync.WaitGroup
 	go w.makeup.Run()
-	w.job.Run()
+	for _, job := range w.jobs {
+		wg.Add(1)
+		go func(job *Job) {
+			job.Run()
+			wg.Done()
+		}(job)
+	}
+	wg.Wait()
 }
 
 // MakeUpTask 补偿任务
@@ -124,7 +129,7 @@ func (w *Watcher) makeUpTask() {
 		timer   = time.Now().Add(-10 * time.Second)
 		members []interface{}
 	)
-	result, err := w.redisClient.GetClient().ZRangeByScore(w.ctx, w.queueKey, &redis.ZRangeBy{Min: "0", Max: strconv.FormatInt(timer.UnixMilli(), 10)}).Result()
+	result, err := w.redisClient.ZRangeByScore(w.ctx, w.queueKey, &redis.ZRangeBy{Min: "0", Max: strconv.FormatInt(timer.UnixMilli(), 10)}).Result()
 	if err != nil {
 		fmt.Printf("Watcher makeup failed: err=%v", err)
 		return
@@ -138,15 +143,15 @@ func (w *Watcher) makeUpTask() {
 		members = append(members, r)
 	}
 
-	err = w.redisClient.GetClient().ZRem(w.ctx, w.queueKey, members...).Err()
+	err = w.redisClient.ZRem(w.ctx, w.queueKey, members...).Err()
 	if err != nil {
 		fmt.Printf("Watcher makeup failed: err=%v", err)
 	}
 	return
 }
 
-func (w *Watcher) watchHandler(ctx context.Context, callback Callback) {
-	msg, err := w.pubsub.ReceiveMessage(ctx)
+func (w *Watcher) watchHandler(ctx context.Context, pubsub *redis.PubSub, callback Callback) {
+	msg, err := pubsub.ReceiveMessage(ctx)
 	if err != nil {
 		fmt.Println("Error receiving message:", err)
 	}
@@ -158,5 +163,5 @@ func (w *Watcher) watchHandler(ctx context.Context, callback Callback) {
 	eventType := strings.TrimPrefix(msg.Channel, fmt.Sprintf("%s:", splitPrefix[0]))
 	callback(EventType(eventType), msg.Payload)
 	// 执行成功，则删除补偿队列中的 key
-	w.redisClient.GetClient().ZRem(ctx, w.queueKey, msg.Payload)
+	w.redisClient.ZRem(ctx, w.queueKey, msg.Payload)
 }
