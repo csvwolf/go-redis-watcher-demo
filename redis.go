@@ -99,7 +99,7 @@ func (r *RedisClusterClient) Set(ctx context.Context, key string, value interfac
 		return err
 	}
 
-	// 队列用于补偿
+	// 队列用于补偿，这里更好的写法是使用 Lua 脚本保证事务性
 	if err = r.client.ZAdd(ctx, r.queueKey, redis.Z{Member: key, Score: float64(now.UnixMilli())}).Err(); err != nil {
 		return err
 	}
