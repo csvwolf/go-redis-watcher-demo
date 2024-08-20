@@ -3,43 +3,70 @@ package main
 import (
 	"context"
 	"github.com/redis/go-redis/v9"
+	"strconv"
 	"sync"
 	"time"
 )
 
 type RedisClient interface {
 	Close() error
-	Set(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.StatusCmd
-	ZRem(ctx context.Context, key string, members ...interface{}) *redis.IntCmd
-	ZAdd(ctx context.Context, key string, members ...redis.Z) *redis.IntCmd
-	ZRangeByScore(ctx context.Context, key string, opt *redis.ZRangeBy) *redis.StringSliceCmd
+	QueueKey() string
+	Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error
+	RemoveFromQueue(ctx context.Context, members ...interface{}) *redis.IntCmd
+	GetKeysByTime(ctx context.Context, endTime time.Time) ([]string, error)
 	PSubscribe(ctx context.Context, channels ...string) []*redis.PubSub
 }
 
 type RedisSingleClient struct {
-	client *redis.Client
+	client   *redis.Client
+	queueKey string
 }
 
-func NewSingleClient(r *redis.Client) RedisClient {
+type RedisConfig struct {
+	QueueKey string
+}
+
+func (config *RedisConfig) GetQueueKey() string {
+	if config == nil || config.QueueKey == "" {
+		return "job:delayed"
+	}
+	return config.QueueKey
+}
+
+func NewSingleClient(r *redis.Client, config *RedisConfig) RedisClient {
 	return &RedisSingleClient{
-		client: r,
+		client:   r,
+		queueKey: config.GetQueueKey(),
 	}
 }
 
-func (r *RedisSingleClient) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.StatusCmd {
-	return r.client.Set(ctx, key, value, expiration)
+func (r *RedisSingleClient) QueueKey() string {
+	return r.queueKey
 }
 
-func (r *RedisSingleClient) ZRem(ctx context.Context, key string, members ...interface{}) *redis.IntCmd {
-	return r.client.ZRem(ctx, key, members...)
+func (r *RedisSingleClient) Set(ctx context.Context, key string, value interface{}, expire time.Duration) error {
+	var (
+		err error
+		now = time.Now().Add(expire)
+	)
+
+	if err = r.client.Set(ctx, key, value, expire).Err(); err != nil {
+		return err
+	}
+
+	// 队列用于补偿
+	if err = r.client.ZAdd(ctx, r.queueKey, redis.Z{Member: key, Score: float64(now.UnixMilli())}).Err(); err != nil {
+		return err
+	}
+	return nil
 }
 
-func (r *RedisSingleClient) ZAdd(ctx context.Context, key string, members ...redis.Z) *redis.IntCmd {
-	return r.client.ZAdd(ctx, key, members...)
+func (r *RedisSingleClient) GetKeysByTime(ctx context.Context, endTime time.Time) ([]string, error) {
+	return r.client.ZRangeByScore(ctx, r.queueKey, &redis.ZRangeBy{Min: "0", Max: strconv.FormatInt(endTime.UnixMilli(), 10)}).Result()
 }
 
-func (r *RedisSingleClient) ZRangeByScore(ctx context.Context, key string, opt *redis.ZRangeBy) *redis.StringSliceCmd {
-	return r.client.ZRangeByScore(ctx, key, opt)
+func (r *RedisSingleClient) RemoveFromQueue(ctx context.Context, members ...interface{}) *redis.IntCmd {
+	return r.client.ZRem(ctx, r.queueKey, members...)
 }
 
 func (r *RedisSingleClient) Close() error {
@@ -51,29 +78,36 @@ func (r *RedisSingleClient) PSubscribe(ctx context.Context, channels ...string) 
 }
 
 type RedisClusterClient struct {
-	client *redis.ClusterClient
+	client   *redis.ClusterClient
+	queueKey string
 }
 
-func NewClusterClient(r *redis.ClusterClient) RedisClient {
+func NewClusterClient(r *redis.ClusterClient, config *RedisConfig) RedisClient {
 	return &RedisClusterClient{
-		client: r,
+		client:   r,
+		queueKey: config.GetQueueKey(),
 	}
 }
 
-func (r *RedisClusterClient) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) *redis.StatusCmd {
-	return r.client.Set(ctx, key, value, expiration)
+func (r *RedisClusterClient) Set(ctx context.Context, key string, value interface{}, expire time.Duration) error {
+	var (
+		err error
+		now = time.Now().Add(expire)
+	)
+
+	if err = r.client.Set(ctx, key, value, expire).Err(); err != nil {
+		return err
+	}
+
+	// 队列用于补偿
+	if err = r.client.ZAdd(ctx, r.queueKey, redis.Z{Member: key, Score: float64(now.UnixMilli())}).Err(); err != nil {
+		return err
+	}
+	return nil
 }
 
-func (r *RedisClusterClient) ZRem(ctx context.Context, key string, members ...interface{}) *redis.IntCmd {
-	return r.client.ZRem(ctx, key, members...)
-}
-
-func (r *RedisClusterClient) ZAdd(ctx context.Context, key string, members ...redis.Z) *redis.IntCmd {
-	return r.client.ZAdd(ctx, key, members...)
-}
-
-func (r *RedisClusterClient) ZRangeByScore(ctx context.Context, key string, opt *redis.ZRangeBy) *redis.StringSliceCmd {
-	return r.client.ZRangeByScore(ctx, key, opt)
+func (r *RedisClusterClient) RemoveFromQueue(ctx context.Context, members ...interface{}) *redis.IntCmd {
+	return r.client.ZRem(ctx, r.queueKey, members...)
 }
 
 func (r *RedisClusterClient) Close() error {
@@ -93,4 +127,12 @@ func (r *RedisClusterClient) PSubscribe(ctx context.Context, channels ...string)
 		return nil
 	})
 	return pubsubs
+}
+
+func (r *RedisClusterClient) QueueKey() string {
+	return r.queueKey
+}
+
+func (r *RedisClusterClient) GetKeysByTime(ctx context.Context, endTime time.Time) ([]string, error) {
+	return r.client.ZRangeByScore(ctx, r.queueKey, &redis.ZRangeBy{Min: "0", Max: strconv.FormatInt(endTime.UnixMilli(), 10)}).Result()
 }

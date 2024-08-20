@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/redis/go-redis/v9"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,7 +21,6 @@ type Callback = func(action EventType, key string)
 
 type Watcher struct {
 	redisClient RedisClient
-	queueKey    string
 	jobs        []*Job
 	channel     string
 	pubsubs     []*redis.PubSub
@@ -61,7 +59,6 @@ func (config *Config) GetCallback() Callback {
 func NewWatcher(ctx context.Context, client RedisClient, config *Config, channel string) *Watcher {
 	watcher := &Watcher{
 		redisClient: client,
-		queueKey:    config.GetQueueKey(),
 		ctx:         ctx,
 		callback:    config.GetCallback(),
 		channel:     channel,
@@ -92,23 +89,6 @@ func (w *Watcher) Close() error {
 	return nil
 }
 
-func (w *Watcher) SetKey(ctx context.Context, key string, value interface{}, expire time.Duration) error {
-	var (
-		err error
-		now = time.Now().Add(expire)
-	)
-
-	if err = w.redisClient.Set(ctx, key, value, expire).Err(); err != nil {
-		return err
-	}
-
-	// 队列用于补偿
-	if err = w.redisClient.ZAdd(ctx, w.queueKey, redis.Z{Member: key, Score: float64(now.UnixMilli())}).Err(); err != nil {
-		return err
-	}
-	return nil
-}
-
 func (w *Watcher) Watch() {
 	var wg sync.WaitGroup
 	go w.makeup.Run()
@@ -129,7 +109,7 @@ func (w *Watcher) makeUpTask() {
 		timer   = time.Now().Add(-10 * time.Second)
 		members []interface{}
 	)
-	result, err := w.redisClient.ZRangeByScore(w.ctx, w.queueKey, &redis.ZRangeBy{Min: "0", Max: strconv.FormatInt(timer.UnixMilli(), 10)}).Result()
+	result, err := w.redisClient.GetKeysByTime(w.ctx, timer)
 	if err != nil {
 		fmt.Printf("Watcher makeup failed: err=%v", err)
 		return
@@ -143,7 +123,7 @@ func (w *Watcher) makeUpTask() {
 		members = append(members, r)
 	}
 
-	err = w.redisClient.ZRem(w.ctx, w.queueKey, members...).Err()
+	err = w.redisClient.RemoveFromQueue(w.ctx, members...).Err()
 	if err != nil {
 		fmt.Printf("Watcher makeup failed: err=%v", err)
 	}
@@ -163,5 +143,5 @@ func (w *Watcher) watchHandler(ctx context.Context, pubsub *redis.PubSub, callba
 	eventType := strings.TrimPrefix(msg.Channel, fmt.Sprintf("%s:", splitPrefix[0]))
 	callback(EventType(eventType), msg.Payload)
 	// 执行成功，则删除补偿队列中的 key
-	w.redisClient.ZRem(ctx, w.queueKey, msg.Payload)
+	w.redisClient.RemoveFromQueue(ctx, msg.Payload)
 }
