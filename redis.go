@@ -53,7 +53,9 @@ func (r *RedisSingleClient) Set(ctx context.Context, key string, value interface
 	if err = r.client.Set(ctx, key, value, expire).Err(); err != nil {
 		return err
 	}
-
+	if expire == 0 {
+		return nil
+	}
 	// 队列用于补偿
 	if err = r.client.ZAdd(ctx, r.queueKey, redis.Z{Member: key, Score: float64(now.UnixMilli())}).Err(); err != nil {
 		return err
@@ -97,6 +99,9 @@ func (r *RedisClusterClient) Set(ctx context.Context, key string, value interfac
 
 	if err = r.client.Set(ctx, key, value, expire).Err(); err != nil {
 		return err
+	}
+	if expire == 0 {
+		return nil
 	}
 
 	// 队列用于补偿，这里更好的写法是使用 Lua 脚本保证事务性
